@@ -17,6 +17,6 @@ SUBDIRS += "QCL"
 #SUBDIRS += "WCL"
 #SUBDIRS += "GeographicLib-1.48/GeographicLib.pro"
 #SUBDIRS += "astrometry++"
-SUBDIRS += "gnuCash"
+SUBDIRS += "gnuCash-price-upload"
 
 DEFINES += QWT_STATIC
