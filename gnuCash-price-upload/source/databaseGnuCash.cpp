@@ -63,6 +63,7 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
   std::string commodityGUID;
   std::string currencyGUID;
   std::uint64_t commidityFraction;
+  size_t recordCount = 0;
 
     // Database structure
     //  GUID
@@ -104,7 +105,8 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
 
   sqlWriter.resetQuery();
   sqlWriter.select({"guid"}).from({"commodities"}).
-      where({GCL::sqlwriter::parameterTriple("mnemonic", "=", currencyName)});
+      where({GCL::sqlwriter::parameterTriple("mnemonic", "=", currencyName),
+             GCL::sqlwriter::parameterTriple("namespace", "=", "'CURRENCY'")});
   if (sqlQuery->exec(QString::fromStdString(sqlWriter.string())))
   {
     sqlQuery->first();
@@ -125,12 +127,11 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
     throw std::runtime_error("query error");
   };
 
-
   sqlWriter.resetQuery();
   sqlWriter.insertInto("prices",
                        {"guid", "commodity_guid", "currency_guid", "date", "source", "type", "value_num", "value_denom"})
       .values({{GCL::sqlwriter::bindValue(":guid"), commodityGUID, currencyGUID, GCL::sqlwriter::bindValue(":date"),
-             "Finance::Quote", "last", GCL::sqlwriter::bindValue(":numerator"), GCL::sqlwriter::bindValue("denominator")
+             "'Finance::Quote'", "'last'", GCL::sqlwriter::bindValue(":numerator"), GCL::sqlwriter::bindValue("denominator")
                }});
 
   sqlQuery->clear();
@@ -140,37 +141,86 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
   {
     std::uint64_t numerator;
     std::uint64_t denominator;
-    std::string GUID;
 
-    denominator = commidityFraction;
-    cv.value *= denominator;
+      // Check for duplicates
 
-      /// Capture an additional 4 decimal points if required.
+    GCL::sqlwriter::CSQLWriter sqlWriter2;
+    QSqlQuery sqlQuery2(*dBase);
 
-    if (std::floor(cv.value) != cv.value)
+    sqlWriter2.resetQuery();
+    sqlWriter2.select({"guid"}).from({"prices"}).where({GCL::sqlwriter::parameterTriple("commodity_guid", "=", commodityGUID),
+                                                      GCL::sqlwriter::parameterTriple("currency_guid", "=", currencyGUID),
+                                                      GCL::sqlwriter::parameterTriple("date", "=", boost::str(boost::format("%04u-%02u-%02u") % cv.year % cv.month % cv.day)),
+                                                      GCL::sqlwriter::parameterTriple("source", "=", "'Finance::Quote'"),
+                                                     });
+    if (sqlQuery2.exec(QString::fromStdString(sqlWriter2.string())))
     {
-      denominator *= 100;
-      cv.value *= 100;
-
-      if (std::floor(cv.value) != cv.value)
+      sqlQuery2.first();
+      if (sqlQuery2.isValid())
       {
-        denominator *= 100;
-        cv.value *= 100;
-      };
-    };
+        INFOMESSAGE(boost::str(boost::format("Duplicate record found (%li of %li). %04i-%02i-%02i. Ignoring") % ++recordCount
+                               % commodityValues.size() % cv.year % cv.month % cv.day));
+      }
+      else
+      {
+        denominator = commidityFraction;
+        cv.value *= denominator;
 
-    numerator = std::floor(cv.value);
+          /// Capture an additional 8 decimal points if required.
 
-    sqlQuery->bindValue(":guid", QUuid::createUuid().toString());
-    sqlQuery->bindValue(":date", QString::fromStdString(boost::str(boost::format("%04u-%02u-%02u") % cv.year % cv.month % cv.day)));
-    sqlQuery->bindValue(":numerator", static_cast<qulonglong>(numerator));
-    sqlQuery->bindValue("denominator", static_cast<qulonglong>(denominator));
+        if (std::floor(cv.value) != cv.value)
+        {
+          denominator *= 100;
+          cv.value *= 100;
 
-    if (!sqlQuery->exec())
+          if (std::floor(cv.value) != cv.value)
+          {
+            denominator *= 100;
+            cv.value *= 100;
+
+            if (std::floor(cv.value) != cv.value)
+            {
+              denominator *= 100;
+              cv.value *= 100;
+
+              if (std::floor(cv.value) != cv.value)
+              {
+                denominator *= 100;
+                cv.value *= 100;
+              };
+            };
+          };
+        };
+
+        numerator = std::floor(cv.value);
+
+        sqlQuery->bindValue(":guid", QUuid::createUuid().toString());
+        sqlQuery->bindValue(":date", QString::fromStdString(boost::str(boost::format("%04u-%02u-%02u") % cv.year % cv.month % cv.day)));
+        sqlQuery->bindValue(":numerator", static_cast<qulonglong>(numerator));
+        sqlQuery->bindValue(":denominator", static_cast<qulonglong>(denominator));
+
+        if (!sqlQuery->exec())
+        {
+          processErrorInformation();
+        };
+
+        recordCount++;
+
+      }
+    }
+    else
     {
       processErrorInformation();
+      throw std::runtime_error("query error");
+    };
+
+    sqlQuery2.finish();
+
+    if( (recordCount % 100) == 0)
+    {
+      INFOMESSAGE(boost::str(boost::format("Completed %li of %li records.") % recordCount % commodityValues.size()));
     };
   };      // For loop.
 
-
+  INFOMESSAGE("Completed writing records to database.");
 }

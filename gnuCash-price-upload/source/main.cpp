@@ -64,7 +64,7 @@
 
 int const MAJORVERSION	= 2018;       // Major version (year)
 int const MINORVERSION	= 6;          // Minor version (month)
-std::uint16_t const BUILDNUMBER = 0x001F;
+std::uint16_t const BUILDNUMBER = 0x002E;
 std::string const BUILDDATE(__DATE__);
 
 ///// @brief Main function for the application.
@@ -90,6 +90,7 @@ int main(int argc, char *argv[])
   std::string currencyName;
   CGnuCashDatabase gnuCashDatabase;
   std::uint8_t columnNumber;
+  size_t lineCount = 0;
   bool header;
 
   try
@@ -105,7 +106,7 @@ int main(int argc, char *argv[])
       // Banner
 
     INFOMESSAGE("gnuCash: Share Price Upload");
-    INFOMESSAGE(boost::str(boost::format("Version: %u-%02u.%04x") % MAJORVERSION % MINORVERSION % BUILDNUMBER));
+    INFOMESSAGE(boost::str(boost::format("Version: %u-%02u.%04X") % MAJORVERSION % MINORVERSION % BUILDNUMBER));
     INFOMESSAGE("Copyright 2018 Gavin Blakeman");
 
     QCL::CDatabase::initialiseDrivers();
@@ -121,6 +122,7 @@ int main(int argc, char *argv[])
         ("dbpassword", boost::program_options::value<std::string>(&dbPassword)->default_value("GNUCASH"), "database password <GNUCASH>")
         ("file,f", boost::program_options::value<boost::filesystem::path>(&ifn),"File Name with Share Price Data")
         ("share,s", boost::program_options::value<std::string>(&shareName), "Share Name")
+        ("currency", boost::program_options::value<std::string>(&currencyName)->default_value("AUD"), "Currency Name")
         ("column,c", boost::program_options::value<std::uint8_t>(&columnNumber), "Column number with share prices. 0 = Date Column")
         ("header,h", boost::program_options::value<bool>(&header)->default_value(true), "First line of .csv file is headings.")
         ("version,v", "Display version and status information.")
@@ -169,6 +171,7 @@ int main(int argc, char *argv[])
       std::string szLine;
 
       std::getline(ifs, szLine);
+      lineCount++;
     };
 
     while (!ifs.eof())
@@ -180,76 +183,83 @@ int main(int argc, char *argv[])
       std::string szTemp;
 
       std::getline(ifs, szLine);
+      lineCount++;
 
-        // Decompose the line into the relevant values.
-        // Line is in the format "date, open, high, low, close, adj close, volume"
-        // We only need date and close.
-
-        // Date
-
-      indexEnd = szLine.find(",", indexStart);
-      szDate = szLine.substr(indexStart, indexEnd - indexStart);
-      indexStart = indexEnd + 1;
-
-        // open
-
-      indexEnd = szLine.find(",", indexStart);
-      indexStart = indexEnd + 1;
-
-      // high
-
-      indexEnd = szLine.find(",", indexStart);
-      indexStart = indexEnd + 1;
-
-      // low
-
-      indexEnd = szLine.find(",", indexStart);
-      indexStart = indexEnd + 1;
-
-      // close
-
-      indexEnd = szLine.find(",", indexStart);
-      szClose = szLine.substr(indexStart, indexEnd - indexStart);
-
-      // Now parse the strings and create the commodity entry.
-
-
-      try
+      if (!szLine.empty())
       {
-        SCommodityValue commodityValue;
 
-        boost::trim(szDate);
-        boost::trim(szClose);
+          // Decompose the line into the relevant values.
+          // Line is in the format "date, open, high, low, close, adj close, volume"
+          // We only need date and close.
 
-        // Date should be in form yyyy-mm-dd.
+          // Date
 
-        indexStart = 0;
-        indexEnd = szDate.find("-", indexStart);
-        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
-        commodityValue.year = boost::lexical_cast<std::uint16_t>(szTemp);
-
+        indexEnd = szLine.find(",", indexStart);
+        szDate = szLine.substr(indexStart, indexEnd - indexStart);
         indexStart = indexEnd + 1;
-        indexEnd = szDate.find("-", indexStart);
-        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
-        commodityValue.month = boost::lexical_cast<std::uint16_t>(szTemp);
 
+          // open
+
+        indexEnd = szLine.find(",", indexStart);
         indexStart = indexEnd + 1;
-        indexEnd = szDate.size();
-        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
-        commodityValue.day = boost::lexical_cast<std::uint16_t>(szTemp);
 
-        commodityValue.type = "last";
-        commodityValue.source = "Finance::Quote";
-        commodityValue.value = boost::lexical_cast<double>(szClose);
+          // high
 
-        commodityValues.push_back(commodityValue);
-      }
-      catch(std::runtime_error &re)
-      {
-        GCL::logger::defaultLogger().shutDown();
-      }
+        indexEnd = szLine.find(",", indexStart);
+        indexStart = indexEnd + 1;
+
+          // low
+
+        indexEnd = szLine.find(",", indexStart);
+        indexStart = indexEnd + 1;
+
+          // close
+
+        indexEnd = szLine.find(",", indexStart);
+        szClose = szLine.substr(indexStart, indexEnd - indexStart);
+
+          // Now parse the strings and create the commodity entry.
+
+
+        try
+        {
+          SCommodityValue commodityValue;
+
+          boost::trim(szDate);
+          boost::trim(szClose);
+
+          // Date should be in form yyyy-mm-dd.
+
+          indexStart = 0;
+          indexEnd = szDate.find("-", indexStart);
+          szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+          commodityValue.year = boost::lexical_cast<std::uint16_t>(szTemp);
+
+          indexStart = indexEnd + 1;
+          indexEnd = szDate.find("-", indexStart);
+          szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+          commodityValue.month = boost::lexical_cast<std::uint16_t>(szTemp);
+
+          indexStart = indexEnd + 1;
+          indexEnd = szDate.size();
+          szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+          commodityValue.day = boost::lexical_cast<std::uint16_t>(szTemp);
+
+          commodityValue.type = "last";
+          commodityValue.source = "Finance::Quote";
+          commodityValue.value = boost::lexical_cast<double>(szClose);
+
+          commodityValues.push_back(commodityValue);
+        }
+        catch(...)
+        {
+          WARNINGMESSAGE(boost::str(boost::format("Error in line %li. Continuing...") % lineCount));
+        }
+      };
     };    // while statement.
 
+    INFOMESSAGE("Starting writing records to database...");
+    INFOMESSAGE(boost::str(boost::format("There are %li records to write.") % commodityValues.size()));
 
     gnuCashDatabase.writeCurrencyValues(commodityValues, shareName, currencyName);
 
@@ -259,7 +269,9 @@ int main(int argc, char *argv[])
     GCL::logger::defaultLogger().shutDown();
   }
 
+  INFOMESSAGE("Completed uploading records to database.");
 
+  GCL::logger::defaultLogger().shutDown();
   return returnValue;
 }
 
