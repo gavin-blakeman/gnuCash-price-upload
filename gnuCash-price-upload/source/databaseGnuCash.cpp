@@ -5,6 +5,10 @@
 #include <cmath>
 #include <limits>
 
+  // Miscellaneous libraries
+
+#include "boost/format.hpp"
+
 /// @brief Constructor for the database class.
 /// @throws None.
 /// @version 2018-06-23/GGB - Function created.
@@ -24,7 +28,7 @@ bool CGnuCashDatabase::createConnection(QString const &driverName, QString const
 
   if (returnValue)
   {
-    sqlQuery.reset(new QSQLQuery(*dBase));
+    sqlQuery.reset(new QSqlQuery(*dBase));
   };
 
   return returnValue;
@@ -43,14 +47,14 @@ void CGnuCashDatabase::processErrorInformation() const
   ERRORMESSAGE("Error returned by Driver: " + error.nativeErrorCode().toStdString());
   ERRORMESSAGE("Text returned by driver: " + error.driverText().toStdString());
   ERRORMESSAGE("Text returned by database: " + error.databaseText().toStdString());
-};
+}
 
 /// @brief Writes currency records to the database.
 /// @param[in] commodityValues: The commodity values to write.
 /// @param[in] commodityName: The name of the commodity to write.
 /// @param[in] currencyName: The name of the currency to use.
 /// @returns
-/// @throws
+/// @throws std::runtime_error
 /// @version 2018-06-23/GGB - Function created.
 
 bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValues, std::string const &commodityName,
@@ -58,7 +62,7 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
 {
   std::string commodityGUID;
   std::string currencyGUID;
-
+  std::uint64_t commidityFraction;
 
     // Database structure
     //  GUID
@@ -70,11 +74,64 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
     //  value_num
     //  value_denom
 
+    // First get the commodity GUID and fraction.
+
+  sqlWriter.resetQuery();
+  sqlWriter.select({"guid", "fraction"}).from({"commodities"}).
+      where({GCL::sqlwriter::parameterTriple("mnemonic", "=", commodityName)});
+  if (sqlQuery->exec(QString::fromStdString(sqlWriter.string())))
+  {
+    sqlQuery->first();
+    if (sqlQuery->isValid())
+    {
+      commodityGUID = sqlQuery->value(0).toString().toStdString();
+      commidityFraction = sqlQuery->value(1).toULongLong();
+    }
+    else
+    {
+      processErrorInformation();
+      ERRORMESSAGE("Cannot find Share: " + commodityName);
+      throw std::runtime_error("Cannot find share");
+    };
+  }
+  else
+  {
+    processErrorInformation();
+    throw std::runtime_error("query error");
+  };
+
+    // Now get the currency GUID
+
+  sqlWriter.resetQuery();
+  sqlWriter.select({"guid"}).from({"commodities"}).
+      where({GCL::sqlwriter::parameterTriple("mnemonic", "=", currencyName)});
+  if (sqlQuery->exec(QString::fromStdString(sqlWriter.string())))
+  {
+    sqlQuery->first();
+    if (sqlQuery->isValid())
+    {
+      currencyGUID = sqlQuery->value(0).toString().toStdString();
+    }
+    else
+    {
+      processErrorInformation();
+      ERRORMESSAGE("Cannot find Curreny: " + currencyName);
+      throw std::runtime_error("Cannot find currency");
+    };
+  }
+  else
+  {
+    processErrorInformation();
+    throw std::runtime_error("query error");
+  };
+
+
   sqlWriter.resetQuery();
   sqlWriter.insertInto("prices",
-  {"guid", "commodity_guid", "currency_guid", "date", "source", "type", "value_num", "value_denom"})
-      .values(GCL::sqlwriter::bindValue(":guid"), commodityGUID, currencyGUID, GCL::sqlwriter::bindValue(":date"),
-             "Finance::Quote", "last", GCL::sqlwriter::bindValue(":numerator"), GCL::sqlwriter::bindValue("denominator"));
+                       {"guid", "commodity_guid", "currency_guid", "date", "source", "type", "value_num", "value_denom"})
+      .values({{GCL::sqlwriter::bindValue(":guid"), commodityGUID, currencyGUID, GCL::sqlwriter::bindValue(":date"),
+             "Finance::Quote", "last", GCL::sqlwriter::bindValue(":numerator"), GCL::sqlwriter::bindValue("denominator")
+               }});
 
   sqlQuery->clear();
   sqlQuery->prepare(QString::fromStdString(sqlWriter.string()));
@@ -85,32 +142,29 @@ bool CGnuCashDatabase::writeCurrencyValues(DCommodityValues const &commodityValu
     std::uint64_t denominator;
     std::string GUID;
 
-    if (std::floor(cv.value) < static_cast<double>(std::numeric_limits<std::uint64_t>::max()) )
+    denominator = commidityFraction;
+    cv.value *= denominator;
+
+      /// Capture an additional 4 decimal points if required.
+
+    if (std::floor(cv.value) != cv.value)
     {
-      double temp;
-      std::uint_least8_t digitCounter = 0;
+      denominator *= 100;
+      cv.value *= 100;
 
-      numerator = std::floor(cv.value);
-      cv.value -= std::floor(cv.value);
-      denominator = 1;
-
-      while(std::modf(cv.value * denominator, &temp) && (digitCounter <= 10) )
+      if (std::floor(cv.value) != cv.value)
       {
-        denominator *= 10;
-        digitCounter++;
+        denominator *= 100;
+        cv.value *= 100;
       };
+    };
 
-      denominator = std::floor(cv.value * denominator);
-    }
-    else
-    {
-
-    }
+    numerator = std::floor(cv.value);
 
     sqlQuery->bindValue(":guid", QUuid::createUuid().toString());
-    sqlQuery->bindValue(":date", boost::str(boost::format("%i-%i-%i") % cv.year % cv.month % cv.day));
-    sqlQuery->bindValue(":numerator", numerator);
-    sqlQuery->bindValue("denominator", denominator);
+    sqlQuery->bindValue(":date", QString::fromStdString(boost::str(boost::format("%04u-%02u-%02u") % cv.year % cv.month % cv.day)));
+    sqlQuery->bindValue(":numerator", static_cast<qulonglong>(numerator));
+    sqlQuery->bindValue("denominator", static_cast<qulonglong>(denominator));
 
     if (!sqlQuery->exec())
     {

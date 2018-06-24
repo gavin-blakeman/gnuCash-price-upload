@@ -29,33 +29,43 @@
 //
 //*********************************************************************************************************************************
 
-  // Standard C++ library headers.
+// Standard C++ library headers.
 
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
-  // Qt Library headers
+// Qt Library headers
 
 #include <Qt>
 #include <QCoreApplication>
 
-  // Miscellaneous library headers
+// Miscellaneous library headers
 
-//#include <boost/algorithm/string.hpp>
-//#include <boost/asio/ip/address_v4.hpp>
-//#include <boost/chrono.hpp>
-//#include <boost/iostreams/tee.hpp>
-//#include <boost/iostreams/stream.hpp>
-//#include <boost/lexical_cast.hpp>
-//#include <boost/program_options.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/asio/ip/address_v4.hpp>
+#include <boost/chrono.hpp>
+#include <boost/format.hpp>
+#include <boost/iostreams/tee.hpp>
+#include <boost/iostreams/stream.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/program_options.hpp>
 #include <GCL>
 
-  // gnuCash headers
+// gnuCash headers
 
 #include "../include/databaseGnuCash.h"
+
+// Software version information
+
+int const MAJORVERSION	= 2018;       // Major version (year)
+int const MINORVERSION	= 6;          // Minor version (month)
+std::uint16_t const BUILDNUMBER = 0x001F;
+std::string const BUILDDATE(__DATE__);
 
 ///// @brief Main function for the application.
 ///// @param[in] argc
@@ -79,63 +89,87 @@ int main(int argc, char *argv[])
   std::string shareName;
   std::string currencyName;
   CGnuCashDatabase gnuCashDatabase;
+  std::uint8_t columnNumber;
+  bool header;
 
   try
   {
 
+    QCoreApplication app(argc, argv);
+
+      // Initialise the default logger. (Note this may throw)
+
     GCL::logger::PLoggerSink coutLogger(new GCL::logger::CStreamSink(std::cout));
     GCL::logger::defaultLogger().addSink(coutLogger);
 
+      // Banner
+
     INFOMESSAGE("gnuCash: Share Price Upload");
-    INFOMESSAGE("Version: 2018-03");
+    INFOMESSAGE(boost::str(boost::format("Version: %u-%02u.%04x") % MAJORVERSION % MINORVERSION % BUILDNUMBER));
     INFOMESSAGE("Copyright 2018 Gavin Blakeman");
 
-    //  boost::program_options::options_description cmdLine("Allowed Options");
-    //  cmdLine.add_options()
-    //      ("help,h", "produce help message")
-    //      ("dbdriver", boost::program_options::value<std::string>(&dbDriver)->default_value("MYSQL"), "database type <MYSQL>")
-    //      ("dbip", boost::program_options::value<std::string>(&dbIPAddr)->default_value("localhost"), "database host address <localhost>")
-    //      ("dbport", boost::program_options::value<int>(&dbPort)->default_value(3306), "database port <3306>")
-    //      ("dbname", boost::program_options::value<std::string>(&dbName)->default_value("GNUCASH"), "database name <GNUCASH>")
-    //      ("dbuser", boost::program_options::value<std::string>(&dbUser)->default_value("GNUCASH"), "database username <GNUCASH>")
-    //      ("dbpassword", boost::program_options::value<std::string>(&dbPassword)->default_value("GNUCASH"), "database password <GNUCASH>")
-    //      ("file", boost::program_options::value<boost::filesystem::path>(&ifn),"File Name with Share Price Data")
-    //      ("share", boost::program_options::value<std::string(&shareName), "Share Name")
-    //      ("version,v", "Display version and status information.")
-    //      ("debug", "Display debug information.")
-    //      ("trace", "Capture Trace Information.")
-    //      ;
+    QCL::CDatabase::initialiseDrivers();
 
-    //  boost::program_options::variables_map vm;
-    //  boost::program_options::store(boost::program_options::command_line_parser(argc, argv).
-    //                                options(cmdLine)
-    //                                .run(), vm);
-    //  boost::program_options::notify(vm);
+    boost::program_options::options_description cmdLine("Allowed Options");
+    cmdLine.add_options()
+        ("help,h", "produce help message")
+        ("dbdriver", boost::program_options::value<std::string>(&dbDriver)->default_value("QMYSQL"), "database type <QMYSQL>")
+        ("dbip", boost::program_options::value<std::string>(&dbIPAddr)->default_value("localhost"), "database host address <localhost>")
+        ("dbport", boost::program_options::value<int>(&dbPort)->default_value(3306), "database port <3306>")
+        ("dbname", boost::program_options::value<std::string>(&dbName)->default_value("gnucash"), "database name <gnucash>")
+        ("dbuser", boost::program_options::value<std::string>(&dbUser)->default_value("GNUCASH"), "database username <GNUCASH>")
+        ("dbpassword", boost::program_options::value<std::string>(&dbPassword)->default_value("GNUCASH"), "database password <GNUCASH>")
+        ("file,f", boost::program_options::value<boost::filesystem::path>(&ifn),"File Name with Share Price Data")
+        ("share,s", boost::program_options::value<std::string>(&shareName), "Share Name")
+        ("column,c", boost::program_options::value<std::uint8_t>(&columnNumber), "Column number with share prices. 0 = Date Column")
+        ("header,h", boost::program_options::value<bool>(&header)->default_value(true), "First line of .csv file is headings.")
+        ("version,v", "Display version and status information.")
+        ("debug", "Display debug information.")
+        ("trace", "Capture Trace Information.")
+        ;
 
-    //  if (vm.count("help"))
-    //  {
-    //    std::cout << cmdLine << std::endl;
-    //    GCL::logger::defaultLogger().shutDown();
-    //    return 0;
-    //  };
+    boost::program_options::variables_map vm;
+    boost::program_options::store(boost::program_options::command_line_parser(argc, argv).
+                                  options(cmdLine)
+                                  .run(), vm);
+    boost::program_options::notify(vm);
+
+    if (vm.count("help"))
+    {
+      std::cout << cmdLine << std::endl;
+      GCL::logger::defaultLogger().shutDown();
+      return 0;
+    };
+
+    if (ifn.empty())
+    {
+      ERRORMESSAGE("Input file name not specified. Use --file or -f option.");
+      std::cout << cmdLine << std::endl;
+      throw std::runtime_error("Input File not specified");
+    };
 
     if (!boost::filesystem::exists(ifn))
     {
       ERRORMESSAGE("Input file not found.");
-      throw xxx;
+      throw std::runtime_error("Input File not found");
     };
-
-    //  QCoreApplication app(argc, argv);
 
     if (!gnuCashDatabase.createConnection(QString::fromStdString(dbDriver), QString::fromStdString(dbIPAddr), dbPort,
                                           QString::fromStdString(dbName), QString::fromStdString(dbUser),
                                           QString::fromStdString(dbPassword)) )
     {
       ERRORMESSAGE("Unable to connect to database.");
-      throw xxx;
+      throw std::runtime_error("Unable to connect to database.");
     }
 
     ifs.open(ifn);
+
+    if (header)
+    {
+      std::string szLine;
+
+      std::getline(ifs, szLine);
+    };
 
     while (!ifs.eof())
     {
@@ -147,37 +181,35 @@ int main(int argc, char *argv[])
 
       std::getline(ifs, szLine);
 
-      // Decompose the line into the relevant values.
-      // Line is in the format "date, open, high, low, close, adj close, volume"
-      // We only need date and close.
+        // Decompose the line into the relevant values.
+        // Line is in the format "date, open, high, low, close, adj close, volume"
+        // We only need date and close.
 
-      //    indexEnd = szLine.find(",", indexStart);
+        // Date
 
-      // Date
+      indexEnd = szLine.find(",", indexStart);
+      szDate = szLine.substr(indexStart, indexEnd - indexStart);
+      indexStart = indexEnd + 1;
 
-      szDate = szLine.substr(indexStart, indexEnd);
-      //    indexStart = indexEnd + 1;
+        // open
 
-      // open
-
-      //    indexEnd = szLine.find(",", indexStart);
-      //    indexStart = indexEnd + 1;
+      indexEnd = szLine.find(",", indexStart);
+      indexStart = indexEnd + 1;
 
       // high
 
-      //    indexEnd = szLine.find(",", indexStart);
-      //    indexStart = indexEnd + 1;
+      indexEnd = szLine.find(",", indexStart);
+      indexStart = indexEnd + 1;
 
       // low
 
-      //    indexEnd = szLine.find(",", indexStart);
-      //    indexStart = indexEnd + 1;
+      indexEnd = szLine.find(",", indexStart);
+      indexStart = indexEnd + 1;
 
       // close
 
-      //     indexEnd = szLine.find(",", indexStart);
-
-      szClose = szLine.substr(indexStart, indexEnd);
+      indexEnd = szLine.find(",", indexStart);
+      szClose = szLine.substr(indexStart, indexEnd - indexStart);
 
       // Now parse the strings and create the commodity entry.
 
@@ -186,25 +218,25 @@ int main(int argc, char *argv[])
       {
         SCommodityValue commodityValue;
 
-        szDate.trim(szDate);
-        szClose.trim(szClose);
+        boost::trim(szDate);
+        boost::trim(szClose);
 
         // Date should be in form yyyy-mm-dd.
 
         indexStart = 0;
         indexEnd = szDate.find("-", indexStart);
-        szTemp = szDate.substr(indexStart, indexEnd);
-        commodityValue.year = boost::lexical_cast<std::uint16_t>(szYear);
+        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+        commodityValue.year = boost::lexical_cast<std::uint16_t>(szTemp);
 
         indexStart = indexEnd + 1;
         indexEnd = szDate.find("-", indexStart);
-        szTemp = szDate.substr(indexStart, indexEnd);
-        commodityValue.month = boost::lexical_cast<std::uint8_t>(szYear);
+        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+        commodityValue.month = boost::lexical_cast<std::uint16_t>(szTemp);
 
         indexStart = indexEnd + 1;
         indexEnd = szDate.size();
-        szTemp = szDate.substr(indexStart, indexEnd);
-        commodityValue.day = boost::lexical_cast<std::uint8_t>(szYear);
+        szTemp = szDate.substr(indexStart, indexEnd - indexStart);
+        commodityValue.day = boost::lexical_cast<std::uint16_t>(szTemp);
 
         commodityValue.type = "last";
         commodityValue.source = "Finance::Quote";
@@ -212,9 +244,9 @@ int main(int argc, char *argv[])
 
         commodityValues.push_back(commodityValue);
       }
-      catch(...)
+      catch(std::runtime_error &re)
       {
-
+        GCL::logger::defaultLogger().shutDown();
       }
     };    // while statement.
 
@@ -222,9 +254,9 @@ int main(int argc, char *argv[])
     gnuCashDatabase.writeCurrencyValues(commodityValues, shareName, currencyName);
 
   }
-  catch (...)
+  catch (std::runtime_error &re)
   {
-
+    GCL::logger::defaultLogger().shutDown();
   }
 
 
